@@ -1,0 +1,1219 @@
+-- ==========================================
+-- Services & Local Player
+-- ==========================================
+local Workspace = game:GetService("Workspace")
+local Players = game:GetService("Players")
+local Debris = game:GetService("Debris")
+local RunService = game:GetService("RunService")
+local CoreGui = game:GetService("CoreGui")
+local UserInputService = game:GetService("UserInputService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local TweenService = game:GetService("TweenService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LocalPlayer = Players.LocalPlayer
+
+-- Pre-created Byte Buffer สำหรับการยิง Block แบบ 0 Delay
+local blockBytes = { 3, 5, 0, 0, 0, 66, 108, 111, 99, 107 }
+local cachedBlockBuffer = buffer.create(#blockBytes)
+for i = 1, #blockBytes do
+    buffer.writeu8(cachedBlockBuffer, i - 1, blockBytes[i])
+end
+
+-- ==========================================
+-- Settings Configuration
+-- ==========================================
+local Settings = {
+    -- FPS Boost Settings
+    FPSBoost = false,
+
+    -- Auto Block & Combat Settings
+    MasterAutoBlock = false, 
+    HitboxEnabled = false,
+    
+    -- Aimbot Settings
+    AimbotKillerEnabled = false,
+    AimbotSurvivorEnabled = false,
+
+    KillerLockRange = 50,
+    SurvivorLockRange = 50,
+
+    KillerLockDuration = 0.5,
+    SurvivorLockDuration = 0.5,
+
+    AimbotSpeed = 0.5,
+    AimbotPrediction = 0.3,
+    
+    -- Hitbox Customization
+    BoxSize = 6,
+    HitboxDistance = 1.5,
+    BoxColor = Color3.fromRGB(0, 255, 0),
+    BoxTransparency = 0.5,
+    GlowMode = true,
+    VisibleTime = 0.4,
+    
+    AutoBlockAnim = false,
+    BlockDelay = 0, 
+    ShowQuickUI = false,
+
+    -- ESP Settings 
+    ESP_Killer = false,
+    Color_Killer = Color3.fromRGB(255, 0, 0),
+    ESP_Survivors = false,
+    Color_Survivors = Color3.fromRGB(0, 170, 255),
+    
+    ESP_Generators = false, 
+    Color_Generators = Color3.fromRGB(255, 255, 0), 
+
+    ESP_BloxyCola = false,
+    Color_BloxyCola = Color3.fromRGB(255, 255, 255),
+    ESP_Medkit = false,
+    Color_Medkit = Color3.fromRGB(0, 255, 0),
+    ESP_DigitalFootprint = false,
+    Color_DigitalFootprint = Color3.fromRGB(170, 0, 255),
+    
+    ESP_Bot = false, 
+    Color_Bot = Color3.fromRGB(255, 100, 100),
+    
+    ESP_Shadow = false, 
+    Color_Shadow = Color3.fromRGB(150, 50, 255),
+
+    -- FlowGame Auto Gen Settings
+    AutoGenEnabled = true,
+    AutoGenSpeed = 0.08,
+
+    -- Hitbox Offset Settings (เอา Hitbox ไว้บนหัว)
+    HitboxOffsetEnabled = false,
+    HitboxOffsetHeight = 15
+}
+
+-- ==========================================
+-- Stamina Settings แยก Killer / Survivor
+-- ==========================================
+local StaminaConfig = {
+    Killer = {
+        InfStamina = false,
+        EnableMaxStamina = false, MaxStamina = 110,
+        EnableStaminaGain = false, StaminaGain = 21,
+        EnableStaminaLoss = false, StaminaLoss = 9.5,
+        EnableSprintSpeed = false, SprintSpeed = 28,
+    },
+    Survivor = {
+        InfStamina = false,
+        EnableMaxStamina = false, MaxStamina = 100,
+        EnableStaminaGain = false, StaminaGain = 20,
+        EnableStaminaLoss = false, StaminaLoss = 10,
+        EnableSprintSpeed = false, SprintSpeed = 28,
+    }
+}
+
+local originalStaminaValues = {
+    MaxStamina = nil,
+    StaminaGain = nil,
+    StaminaLoss = nil,
+    SprintSpeed = nil
+}
+
+local SprintingModule = nil
+pcall(function()
+    SprintingModule = require(ReplicatedStorage.Systems.Character.Game.Sprinting)
+end)
+
+-- รายชื่อ Killer & Survivor Specific
+local KillerNamesList = {
+    ["azure"] = true, ["nosferatu"] = true, ["sixer"] = true, ["1x1x1x1"] = true,
+    ["noli"] = true, ["johndoe"] = true, ["c00lkidd"] = true, ["slasher"] = true
+}
+
+local SurvivorNamesList = {
+    ["guest 1337"] = true, ["chance"] = true, ["veeronica"] = true, ["dusckkar"] = true,
+    ["taph"] = true, ["two time"] = true, ["007n7"] = true, ["builderman"] = true,
+    ["jane doe"] = true, ["noob"] = true, ["elliot"] = true, ["shedletsky"] = true
+}
+
+local function getMyRole()
+    local character = LocalPlayer.Character
+    if not character then return nil end
+
+    local name = string.lower(character.Name)
+    for killerName, _ in pairs(KillerNamesList) do
+        if string.find(name, string.lower(killerName), 1, true) then return "Killer" end
+    end
+    if string.find(name, "killer", 1, true) then return "Killer" end
+
+    for survivorName, _ in pairs(SurvivorNamesList) do
+        if string.find(name, string.lower(survivorName), 1, true) then return "Survivor" end
+    end
+    if string.find(name, "survivor", 1, true) then return "Survivor" end
+
+    local parent = character.Parent
+    while parent and parent ~= Workspace do
+        local parentName = string.lower(parent.Name)
+        if string.find(parentName, "killer", 1, true) then return "Killer" end
+        if string.find(parentName, "survivor", 1, true) then return "Survivor" end
+        parent = parent.Parent
+    end
+
+    return nil
+end
+
+-- ลูปดึงค่า Original Stamina
+task.spawn(function()
+    while task.wait(1) do
+        if not SprintingModule then
+            pcall(function()
+                SprintingModule = require(ReplicatedStorage.Systems.Character.Game.Sprinting)
+            end)
+        end
+        if SprintingModule then
+            if originalStaminaValues.MaxStamina == nil then originalStaminaValues.MaxStamina = SprintingModule.MaxStamina end
+            if originalStaminaValues.StaminaGain == nil then originalStaminaValues.StaminaGain = SprintingModule.StaminaGain end
+            if originalStaminaValues.StaminaLoss == nil then originalStaminaValues.StaminaLoss = SprintingModule.StaminaLoss end
+            if originalStaminaValues.SprintSpeed == nil then originalStaminaValues.SprintSpeed = SprintingModule.SprintSpeed end
+        end
+    end
+end)
+
+-- ลูปควบคุม Stamina ตาม Role ปัจจุบัน
+task.spawn(function()
+    while task.wait(0.1) do
+        if SprintingModule then
+            local role = getMyRole()
+            if role and StaminaConfig[role] then
+                local cfg = StaminaConfig[role]
+                if cfg.InfStamina then
+                    SprintingModule.Stamina = SprintingModule.MaxStamina
+                else
+                    if cfg.EnableMaxStamina then
+                        SprintingModule.MaxStamina = cfg.MaxStamina
+                    elseif originalStaminaValues.MaxStamina ~= nil then
+                        SprintingModule.MaxStamina = originalStaminaValues.MaxStamina
+                    end
+
+                    if cfg.EnableStaminaGain then
+                        SprintingModule.StaminaGain = cfg.StaminaGain
+                    elseif originalStaminaValues.StaminaGain ~= nil then
+                        SprintingModule.StaminaGain = originalStaminaValues.StaminaGain
+                    end
+
+                    if cfg.EnableStaminaLoss then
+                        SprintingModule.StaminaLoss = cfg.StaminaLoss
+                    elseif originalStaminaValues.StaminaLoss ~= nil then
+                        SprintingModule.StaminaLoss = originalStaminaValues.StaminaLoss
+                    end
+
+                    if cfg.EnableSprintSpeed then
+                        SprintingModule.SprintSpeed = cfg.SprintSpeed
+                    elseif originalStaminaValues.SprintSpeed ~= nil then
+                        SprintingModule.SprintSpeed = originalStaminaValues.SprintSpeed
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- ==========================================
+-- Hitbox Offset (เอา Hitbox ไว้บนหัว)
+-- ==========================================
+local originalRootC0 = nil
+local originalHipHeight = nil
+
+local function applyHitboxOffset()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not humanoid or not hrp then return end
+
+    local rootJoint = hrp:FindFirstChild("RootJoint") or hrp:FindFirstChild("RootRigAttachment")
+    if not rootJoint then return end
+
+    if Settings.HitboxOffsetEnabled then
+        if not originalRootC0 then originalRootC0 = rootJoint.C0 end
+        if not originalHipHeight then originalHipHeight = humanoid.HipHeight end
+
+        humanoid.HipHeight = originalHipHeight + Settings.HitboxOffsetHeight
+        rootJoint.C0 = originalRootC0 * CFrame.new(0, -Settings.HitboxOffsetHeight, 0)
+    else
+        if originalRootC0 then rootJoint.C0 = originalRootC0 end
+        if originalHipHeight then humanoid.HipHeight = originalHipHeight end
+        originalRootC0 = nil
+        originalHipHeight = nil
+    end
+end
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+    originalRootC0 = nil
+    originalHipHeight = nil
+    task.wait(1)
+    if Settings.HitboxOffsetEnabled then applyHitboxOffset() end
+end)
+
+local generatorList = {}
+local function scanGenerators()
+    generatorList = {}
+    local names = {}
+    local count = 1
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if string.find(string.lower(obj.Name), "generator", 1, true) then
+            local tpPart = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("RootPart") or obj.PrimaryPart or obj:FindFirstChildOfClass("BasePart")
+            local isFake = false
+            local nameLower = string.lower(obj.Name)
+            if string.find(nameLower, "fake") or string.find(nameLower, "decoy") then isFake = true end
+            
+            if tpPart and not isFake and obj:IsA("Model") then
+                local genName = "เครื่องปั่นไฟที่ " .. count
+                generatorList[genName] = tpPart
+                table.insert(names, genName)
+                count = count + 1
+            end
+        end
+    end
+    return names
+end
+
+-- ==========================================
+-- FPS Boost Module
+-- ==========================================
+local function optimizeInstanceForFPS(inst)
+    if not Settings.FPSBoost or not inst then return end
+    
+    if inst:IsA("BasePart") then
+        if inst.Transparency > 0.05 then return end
+        if inst.Name == "DuckHighlight" or string.find(inst.Name, "Predict") or string.find(string.lower(inst.Name), "hitbox") then return end
+        
+        inst.Material = Enum.Material.SmoothPlastic
+        inst.Reflectance = 0
+    elseif inst:IsA("Decal") or inst:IsA("Texture") then
+        local parent = inst.Parent
+        if parent and parent:IsA("BasePart") and parent.Transparency <= 0.05 then
+            inst.Texture = "" 
+        end
+    elseif inst:IsA("ParticleEmitter") or inst:IsA("Trail") or inst:IsA("Beam") or inst:IsA("Smoke") or inst:IsA("Fire") or inst:IsA("Sparkles") then
+        inst.Enabled = false 
+    end
+end
+
+local function applyFPSBoostAll()
+    if not Settings.FPSBoost then return end
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        optimizeInstanceForFPS(obj)
+    end
+end
+
+-- ==========================================
+-- Helper Functions (Lobby, FakeGen, Collectible)
+-- ==========================================
+local function isInLobby(obj)
+    if not obj then return false end
+    local current = obj
+    while current and current ~= Workspace do
+        local name = string.lower(current.Name)
+        if string.find(name, "lobby") or string.find(name, "waiting") or string.find(name, "menu") or string.find(name, "room") then
+            return true
+        end
+        current = current.Parent
+    end
+    return false
+end
+
+local function isFakeGenerator(obj)
+    if not obj then return true end
+    local name = string.lower(obj.Name)
+    if string.find(name, "fake") or string.find(name, "decoy") or string.find(name, "dummy") or string.find(name, "illusion") or name == "fakegenerator" then
+        return true
+    end
+    
+    local current = obj.Parent
+    while current and current ~= Workspace do
+        if string.lower(current.Name) == "fakegenerator" then
+            return true
+        end
+        current = current.Parent
+    end
+
+    for _, descendant in ipairs(obj:GetDescendants()) do
+        if descendant:IsA("BasePart") then
+            local dName = string.lower(descendant.Name)
+            if string.find(dName, "blackwire") or string.find(dName, "black_wire") or string.find(dName, "blackcable") or string.find(dName, "fakewire") then
+                return true
+            end
+            if (string.find(dName, "wire") or string.find(dName, "cable") or string.find(dName, "rope") or string.find(dName, "line")) then
+                local col = descendant.Color
+                if col.R < 0.15 and col.G < 0.15 and col.B < 0.15 then
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+local function isCollectibleItem(obj)
+    if not obj then return false end
+    local name = string.lower(obj.Name)
+    if name ~= "bloxycola" and name ~= "bloxy cola" and name ~= "medkit" and name ~= "med kit" then
+        return false
+    end
+    return obj:FindFirstChild("ItemRoot") ~= nil
+end
+
+-- ==========================================
+-- Data Dictionaries (ESP & Animations)
+-- ==========================================
+local KillerWindups = {
+    ["126830014841198"] = true, ["130958529065375"] = true, ["94958041603347"] = true,
+    ["118298475669935"] = true, ["109667959938617"] = true, ["108196996477620"] = true, ["125403313786645"] = true,
+    ["18885909645"] = true, ["84069821282466"] = true, ["114126519127454"] = true,
+    ["121858217776572"] = true, ["99824350842479"] = true, ["70371667919898"] = true, ["70785407091644"] = true,
+    ["105458270463374"] = true, ["87347358451124"] = true, ["121778755277919"] = true,
+    ["88970503168421"] = true, ["138938529389204"] = true, ["123780556554672"] = true, ["81299297965542"] = true,
+    ["106538427162796"] = true, ["92567970681901"] = true, ["91509234639766"] = true, ["77375846492436"] = true,
+    ["83829782357897"] = true, ["90620531468240"] = true, ["126171487400618"] = true,
+    ["114506382930939"] = true, ["124705663396411"] = true, ["99829427721752"] = true, ["121293883585738"] = true,
+    ["122709416391891"] = true, ["88451353906104"] = true, ["124269076578545"] = true,
+    ["123172382755876"] = true, ["114266653674439"] = true, ["106427068964975"] = true
+}
+
+local ESPCategories = {
+    Killer = { ConfigKey = "ESP_Killer", ColorKey = "Color_Killer" },
+    Survivors = { ConfigKey = "ESP_Survivors", ColorKey = "Color_Survivors" },
+    Generators = { ConfigKey = "ESP_Generators", ColorKey = "Color_Generators" },
+    BloxyCola = { ConfigKey = "ESP_BloxyCola", ColorKey = "Color_BloxyCola" },
+    Medkit = { ConfigKey = "ESP_Medkit", ColorKey = "Color_Medkit" },
+    DigitalFootprint = { ConfigKey = "ESP_DigitalFootprint", ColorKey = "Color_DigitalFootprint" },
+    Bot = { ConfigKey = "ESP_Bot", ColorKey = "Color_Bot" },
+    Shadow = { ConfigKey = "ESP_Shadow", ColorKey = "Color_Shadow" }
+}
+
+local trackedESP = {}
+
+local function classifyESPObject(obj)
+    if not obj or not obj.Parent then return nil end
+    if isInLobby(obj) then return nil end
+    if not (obj:IsA("Model") or obj:IsA("Tool") or obj:IsA("BasePart")) then return nil end
+
+    if LocalPlayer.Character and (obj == LocalPlayer.Character or obj:IsDescendantOf(LocalPlayer.Character)) then return nil end
+    if obj:IsA("Model") and Players:GetPlayerFromCharacter(obj) == LocalPlayer then return nil end
+    if isFakeGenerator(obj) then return nil end
+
+    local name = string.lower(obj.Name)
+
+    if obj:IsA("BasePart") and name == "shadow" then
+        local parentName = obj.Parent and string.lower(obj.Parent.Name) or ""
+        if string.find(parentName, "shadows", 1, true) then return "Shadow" end
+    end
+
+    if obj:IsA("Model") and (name == "minion" or string.find(name, "minion", 1, true)) then return "Bot" end
+
+    if obj:IsA("Model") and obj:FindFirstChildOfClass("Humanoid") and obj:FindFirstChild("HumanoidRootPart") then
+        local player = Players:GetPlayerFromCharacter(obj)
+
+        for killerName in pairs(KillerNamesList) do
+            if string.find(name, killerName, 1, true) then return "Killer" end
+        end
+        if string.find(name, "killer", 1, true) then return "Killer" end
+
+        if not player then
+            if string.find(name, "bot", 1, true) or string.find(name, "minion", 1, true) or string.find(name, "clone", 1, true) or string.find(name, "summon", 1, true) or string.find(name, "puppet", 1, true) or string.find(name, "decoy", 1, true) or string.find(name, "shadow", 1, true) or string.find(name, "servant", 1, true) or string.find(name, "npc", 1, true) or string.find(name, "helper", 1, true) then
+                return "Bot"
+            end
+        end
+
+        if player and player ~= LocalPlayer then return "Survivors" end
+
+        for survivorName in pairs(SurvivorNamesList) do
+            if string.find(name, survivorName, 1, true) then return "Survivors" end
+        end
+        if string.find(name, "survivor", 1, true) then return "Survivors" end
+
+        return nil
+    end
+
+    if string.find(name, "generator", 1, true) then
+        if isFakeGenerator(obj) then return nil end
+        return "Generators"
+    end
+
+    if name == "bloxycola" or name == "bloxy cola" then
+        if isCollectibleItem(obj) then return "BloxyCola" end
+        return nil
+    end
+
+    if name == "medkit" or name == "med kit" then
+        if isCollectibleItem(obj) then return "Medkit" end
+        return nil
+    end
+
+    if name == "digital footprint" or name == "digitalfootprint" then
+        return "DigitalFootprint"
+    end
+
+    return nil
+end
+
+local function getGeneratorProgressNumeric(genObj)
+    if not genObj then return 0 end
+    local currentVal = 0
+
+    for _, attrName in ipairs({"Progress", "Percent", "State", "Completed", "Repair"}) do
+        local attr = genObj:GetAttribute(attrName)
+        if type(attr) == "number" then
+            currentVal = attr
+            break
+        end
+    end
+
+    if currentVal == 0 then
+        local valObj = genObj:FindFirstChild("Progress", true) or genObj:FindFirstChild("Value", true) or genObj:FindFirstChild("Percent", true)
+        if valObj and (valObj:IsA("NumberValue") or valObj:IsA("IntValue")) then
+            currentVal = valObj.Value
+        end
+    end
+
+    return currentVal
+end
+
+local function updateSingleESP(obj, catKey)
+    if not obj or not obj.Parent or isInLobby(obj) or isFakeGenerator(obj) then return end
+    local info = ESPCategories[catKey]
+    if not info then return end
+
+    local isEnabled = Settings[info.ConfigKey]
+    local color = Settings[info.ColorKey]
+
+    if catKey == "Generators" then
+        local progress = getGeneratorProgressNumeric(obj)
+        if progress >= 100 or progress == 4 then color = Color3.fromRGB(0, 255, 0) end
+    end
+
+    local highlight = obj:FindFirstChild("DuckHighlight")
+    if isEnabled then
+        if not highlight then
+            highlight = Instance.new("Highlight")
+            highlight.Name = "DuckHighlight"
+            highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+            highlight.FillTransparency = 0.5
+            highlight.OutlineTransparency = 0
+            highlight.Parent = obj
+        end
+        highlight.FillColor = color
+        highlight.OutlineColor = color
+        highlight.Enabled = true
+    else
+        if highlight then highlight.Enabled = false end
+    end
+end
+
+local function refreshAllESP()
+    for obj, catKey in pairs(trackedESP) do
+        if isFakeGenerator(obj) then
+            if obj and obj:FindFirstChild("DuckHighlight") then obj.DuckHighlight:Destroy() end
+            trackedESP[obj] = nil
+            continue
+        end
+
+        local isSelf = false
+        if LocalPlayer.Character and (obj == LocalPlayer.Character or obj:IsDescendantOf(LocalPlayer.Character)) then isSelf = true end
+        if obj and obj:IsA("Model") and Players:GetPlayerFromCharacter(obj) == LocalPlayer then isSelf = true end
+
+        local isDead = false
+        if catKey == "Survivors" or catKey == "Killer" or catKey == "Bot" then
+            local hum = obj:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health <= 0 then isDead = true end
+        end
+
+        if obj and obj.Parent and not isInLobby(obj) and not isSelf and not isDead then
+            updateSingleESP(obj, catKey)
+        else
+            if obj and obj:FindFirstChild("DuckHighlight") then obj.DuckHighlight:Destroy() end
+            if isDead or not obj or not obj.Parent then trackedESP[obj] = nil end
+        end
+    end
+end
+
+local function registerESPObject(obj)
+    if not obj or not obj.Parent then return end
+    if isInLobby(obj) or isFakeGenerator(obj) then return end
+
+    local catKey = classifyESPObject(obj)
+    if not catKey then return end
+
+    local currentParent = obj.Parent
+    local isNested = false
+    while currentParent and currentParent ~= Workspace do
+        if isFakeGenerator(currentParent) then return end
+        if trackedESP[currentParent] then isNested = true; break end
+        currentParent = currentParent.Parent
+    end
+
+    if not isNested or catKey == "Bot" or catKey == "Shadow" then
+        trackedESP[obj] = catKey
+        updateSingleESP(obj, catKey)
+    end
+end
+
+-- ==========================================
+-- FlowGame Auto Gen Module
+-- ==========================================
+local FlowGameModule
+local oldNew
+local hookedGen = false
+
+local function isNeighbour(r1, c1, r2, c2)
+    return (r2 == r1-1 and c2 == c1) or (r2 == r1+1 and c2 == c1) or (r2 == r1 and c2 == c1-1) or (r2 == r1 and c2 == c1+1)
+end
+
+local function key(n) return n.row .. "-" .. n.col end
+
+local function orderPath(path, endpoints)
+    if not path or #path == 0 then return path end
+    local start = endpoints and endpoints[1] or path[1]
+    local pool = {}
+    for _, n in ipairs(path) do pool[key(n)] = {row = n.row, col = n.col} end
+    local ordered = {}
+    local cur = {row = start.row, col = start.col}
+    table.insert(ordered, cur)
+    pool[key(cur)] = nil
+    while next(pool) do
+        local found = false
+        for k, n in pairs(pool) do
+            if isNeighbour(cur.row, cur.col, n.row, n.col) then
+                table.insert(ordered, n)
+                pool[k] = nil
+                cur = n
+                found = true
+                break
+            end
+        end
+        if not found then break end
+    end
+    return ordered
+end
+
+local HintSystem = {}
+function HintSystem:Draw(puzzle)
+    if not puzzle or not puzzle.Solution then return end
+    for i = 1, #puzzle.Solution do
+        local path = puzzle.Solution[i]
+        local ends = puzzle.targetPairs[i]
+        local ordered = orderPath(path, ends)
+        puzzle.paths[i] = {}
+        for _, node in ipairs(ordered) do
+            if not Settings.AutoGenEnabled then return end
+            table.insert(puzzle.paths[i], {row = node.row, col = node.col})
+            puzzle:updateGui()
+            task.wait(Settings.AutoGenSpeed)
+        end
+        puzzle:checkForWin()
+    end
+end
+
+local function hookAutoGen()
+    if hookedGen then return end
+    local success, mod = pcall(function()
+        return ReplicatedStorage.Modules.Minigames.FlowGameManager.FlowGame
+    end)
+    if success and mod then
+        FlowGameModule = require(mod)
+        oldNew = oldNew or FlowGameModule.new
+        FlowGameModule.new = function(...)
+            local puzzle = oldNew(...)
+            task.spawn(function()
+                if Settings.AutoGenEnabled then HintSystem:Draw(puzzle) end
+            end)
+            return puzzle
+        end
+        hookedGen = true
+    end
+end
+
+hookAutoGen()
+
+-- ==========================================
+-- UI Setup (Rayfield Library)
+-- ==========================================
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
+local Window = Rayfield:CreateWindow({
+   Name = "Duck Hub 🇹🇭 (FPS Boosted)",
+   LoadingTitle = "กำลังโหลดสคริปต์... สคริปต์นี้ยังอยู่ในช่วงพัฒนา",
+   LoadingSubtitle = "Auto block และอื่นๆ",
+   ConfigurationSaving = { Enabled = false },
+   KeySystem = false,
+})
+
+local CombatTab = Window:CreateTab("Combet & Godmod(beta)", 4483362458)
+local TeleportTab = Window:CreateTab("Teleport", 4483362458) 
+local AutoBlockTab = Window:CreateTab("Auto Block", 4483362458)
+local StaminaTab = Window:CreateTab("Stamina Settings", 4483362458)
+local ESPTab = Window:CreateTab("Visuals (ESP)", 4483362458)
+local MinigamesTab = Window:CreateTab("Minigames", 4483362458)
+
+-- FPS Boost Control
+ESPTab:CreateSection("ระบบปรับปรุงความเร็ว (FPS Boost)")
+ESPTab:CreateToggle({ Name = "โหมดดินน้ำมันลื่นๆ (FPS Boost)", CurrentValue = Settings.FPSBoost, Callback = function(v) 
+    Settings.FPSBoost = v
+    if v then applyFPSBoostAll() end
+end })
+
+-- Teleport Tab UI
+TeleportTab:CreateSection("ระบบวาร์ปเครื่องปั่นไฟ")
+
+local genListNames = {"None"}
+local genInstancesList = {}
+
+local GenDropdown = TeleportTab:CreateDropdown({
+    Name = "เลือกเครื่องปั่นไฟ",
+    Options = genListNames,
+    CurrentOption = {"None"},
+    MultipleOptions = false,
+    Callback = function(Option) end,
+})
+
+TeleportTab:CreateButton({
+    Name = "สแกนหาเครื่องปั่นไฟปัจจุบัน (Refresh)",
+    Callback = function()
+        genListNames = {}
+        genInstancesList = {}
+        local count = 1
+        
+        for obj, catKey in pairs(trackedESP) do
+            if catKey == "Generators" and obj and obj.Parent and not isFakeGenerator(obj) then
+                table.insert(genListNames, "Generator " .. count)
+                table.insert(genInstancesList, obj)
+                count = count + 1
+            end
+        end
+        
+        if #genInstancesList == 0 then
+            for _, obj in ipairs(Workspace:GetDescendants()) do
+                if (obj:IsA("Model") or obj:IsA("BasePart")) and string.find(string.lower(obj.Name), "generator", 1, true) then
+                    if not isInLobby(obj) and not isFakeGenerator(obj) then
+                        local alreadyAdded = false
+                        for _, existing in ipairs(genInstancesList) do
+                            if existing == obj or (obj:IsA("Model") and existing:IsDescendantOf(obj)) or (existing:IsA("Model") and obj:IsDescendantOf(existing)) then
+                                alreadyAdded = true
+                                break
+                            end
+                        end
+                        if not alreadyAdded then
+                            table.insert(genListNames, "Generator " .. count)
+                            table.insert(genInstancesList, obj)
+                            count = count + 1
+                        end
+                    end
+                end
+            end
+        end
+
+        if #genListNames == 0 then 
+            table.insert(genListNames, "ไม่พบเครื่องปั่นไฟ") 
+            GenDropdown:Refresh(genListNames, {"ไม่พบเครื่องปั่นไฟ"})
+        else
+            GenDropdown:Refresh(genListNames, {genListNames[1]})
+        end
+    end,
+})
+
+TeleportTab:CreateButton({
+    Name = "วาร์ปไปเครื่องที่เลือก (Teleport)",
+    Callback = function()
+        local selected = GenDropdown.CurrentOption[1]
+        if selected and selected ~= "None" and selected ~= "ไม่พบเครื่องปั่นไฟ" then
+            local index = tonumber(string.match(selected, "%d+"))
+            if index and genInstancesList[index] then
+                local targetGen = genInstancesList[index]
+                if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+                    local targetPart = targetGen:FindFirstChild("HumanoidRootPart") or targetGen:FindFirstChild("Main") or targetGen.PrimaryPart or targetGen:FindFirstChildWhichIsA("BasePart", true)
+                    if targetPart then
+                        LocalPlayer.Character.HumanoidRootPart.CFrame = targetPart.CFrame * CFrame.new(0, 3, 0)
+                    end
+                end
+            end
+        end
+    end,
+})
+
+-- Minigames Tab
+MinigamesTab:CreateSection("ระบบมินิเกม (FlowGame)")
+MinigamesTab:CreateToggle({ Name = "Auto Gen (แก้เกมปั่นไฟอัตโนมัติ)", CurrentValue = Settings.AutoGenEnabled, Callback = function(v) Settings.AutoGenEnabled = v end })
+MinigamesTab:CreateSlider({ Name = "ความเร็ว Auto Gen (Speed)", Range = {0.01, 0.2}, Increment = 0.01, CurrentValue = Settings.AutoGenSpeed, Callback = function(v) Settings.AutoGenSpeed = v end })
+
+-- Stamina Tab UI
+StaminaTab:CreateSection("⚡ ตั้งค่า Stamina สำหรับ Killer (ฆาตกร)")
+StaminaTab:CreateToggle({ Name = "Infinite Stamina (Killer)", CurrentValue = StaminaConfig.Killer.InfStamina, Callback = function(v) StaminaConfig.Killer.InfStamina = v end })
+StaminaTab:CreateToggle({ Name = "Custom Max Stamina (Killer)", CurrentValue = StaminaConfig.Killer.EnableMaxStamina, Callback = function(v) StaminaConfig.Killer.EnableMaxStamina = v end })
+StaminaTab:CreateInput({ Name = "Max Stamina Value (Killer)", PlaceholderText = "100", RemoveTextAfterFocusLost = false, Callback = function(v) StaminaConfig.Killer.MaxStamina = tonumber(v) or 100 end })
+StaminaTab:CreateToggle({ Name = "Custom Sprint Speed (Killer)", CurrentValue = StaminaConfig.Killer.EnableSprintSpeed, Callback = function(v) StaminaConfig.Killer.EnableSprintSpeed = v end })
+StaminaTab:CreateInput({ Name = "Sprint Speed Value (Killer)", PlaceholderText = "28", RemoveTextAfterFocusLost = false, Callback = function(v) StaminaConfig.Killer.SprintSpeed = tonumber(v) or 28 end })
+
+StaminaTab:CreateSection("🏃‍♂️ ตั้งค่า Stamina สำหรับ Survivor (ผู้รอดชีวิต)")
+StaminaTab:CreateToggle({ Name = "Infinite Stamina (Survivor)", CurrentValue = StaminaConfig.Survivor.InfStamina, Callback = function(v) StaminaConfig.Survivor.InfStamina = v end })
+StaminaTab:CreateToggle({ Name = "Custom Max Stamina (Survivor)", CurrentValue = StaminaConfig.Survivor.EnableMaxStamina, Callback = function(v) StaminaConfig.Survivor.EnableMaxStamina = v end })
+StaminaTab:CreateInput({ Name = "Max Stamina Value (Survivor)", PlaceholderText = "100", RemoveTextAfterFocusLost = false, Callback = function(v) StaminaConfig.Survivor.MaxStamina = tonumber(v) or 100 end })
+StaminaTab:CreateToggle({ Name = "Custom Sprint Speed (Survivor)", CurrentValue = StaminaConfig.Survivor.EnableSprintSpeed, Callback = function(v) StaminaConfig.Survivor.EnableSprintSpeed = v end })
+StaminaTab:CreateInput({ Name = "Sprint Speed Value (Survivor)", PlaceholderText = "28", RemoveTextAfterFocusLost = false, Callback = function(v) StaminaConfig.Survivor.SprintSpeed = tonumber(v) or 28 end })
+
+-- Combat & Hitbox UI
+CombatTab:CreateSection("ระบบซ่อนกล่องชน (Hitbox Offset / Godmode)")
+CombatTab:CreateToggle({ Name = "เปิดย้าย Hitbox ขึ้นบนหัว", CurrentValue = Settings.HitboxOffsetEnabled, Callback = function(v) 
+    Settings.HitboxOffsetEnabled = v 
+    applyHitboxOffset()
+end })
+CombatTab:CreateSlider({ Name = "ปรับความสูง Hitbox (Height)", Range = {5, 50}, Increment = 1, CurrentValue = Settings.HitboxOffsetHeight, Callback = function(v) 
+    Settings.HitboxOffsetHeight = v 
+    if Settings.HitboxOffsetEnabled then applyHitboxOffset() end
+end })
+
+CombatTab:CreateSection("ระบบล็อกเป้า Killer")
+CombatTab:CreateToggle({ Name = "ล็อกเป้าเมื่อเป็น Killer", CurrentValue = Settings.AimbotKillerEnabled, Callback = function(v) Settings.AimbotKillerEnabled = v end })
+CombatTab:CreateSlider({ Name = "ระยะล็อก Killer", Range = {10, 150}, Increment = 5, CurrentValue = Settings.KillerLockRange, Callback = function(v) Settings.KillerLockRange = v end })
+CombatTab:CreateSlider({ Name = "เวลาล็อก Killer", Range = {0.1, 2}, Increment = 0.1, CurrentValue = Settings.KillerLockDuration, Callback = function(v) Settings.KillerLockDuration = v end })
+
+CombatTab:CreateSection("ระบบล็อกเป้า Survivor")
+CombatTab:CreateToggle({ Name = "ล็อกเป้าเมื่อเป็น Survivor", CurrentValue = Settings.AimbotSurvivorEnabled, Callback = function(v) Settings.AimbotSurvivorEnabled = v end })
+CombatTab:CreateSlider({ Name = "ระยะล็อก Survivor", Range = {10, 150}, Increment = 5, CurrentValue = Settings.SurvivorLockRange, Callback = function(v) Settings.SurvivorLockRange = v end })
+CombatTab:CreateSlider({ Name = "เวลาล็อก Survivor", Range = {0.1, 2}, Increment = 0.1, CurrentValue = Settings.SurvivorLockDuration, Callback = function(v) Settings.SurvivorLockDuration = v end })
+
+CombatTab:CreateSection("การหันเป้า")
+CombatTab:CreateSlider({ Name = "ความสมูทในการหัน", Range = {0.1, 1}, Increment = 0.1, CurrentValue = Settings.AimbotSpeed, Callback = function(v) Settings.AimbotSpeed = v end })
+CombatTab:CreateSlider({ Name = "ดักทางล่วงหน้า", Range = {0, 1.5}, Increment = 0.1, CurrentValue = Settings.AimbotPrediction, Callback = function(v) Settings.AimbotPrediction = v end })
+
+CombatTab:CreateSection("ระบบตีแม่นยำ (Hitbox)")
+CombatTab:CreateToggle({ Name = "แสดง hitbox เมื่อ killer m1", CurrentValue = Settings.HitboxEnabled, Callback = function(v) Settings.HitboxEnabled = v end })
+CombatTab:CreateSlider({ Name = "ขนาด hitbox", Range = {3, 15}, Increment = 0.5, CurrentValue = Settings.BoxSize, Callback = function(v) Settings.BoxSize = v end })
+CombatTab:CreateSlider({ Name = "ระยะ hitbox (Distance)", Range = {0, 10}, Increment = 0.5, CurrentValue = Settings.HitboxDistance, Callback = function(v) Settings.HitboxDistance = v end })
+CombatTab:CreateSlider({ Name = "ความใส", Range = {0, 1}, Increment = 0.1, CurrentValue = Settings.BoxTransparency, Callback = function(v) Settings.BoxTransparency = v end })
+CombatTab:CreateColorPicker({ Name = "สี hitbox", Color = Settings.BoxColor, Callback = function(v) Settings.BoxColor = v end })
+
+AutoBlockTab:CreateToggle({ Name = "Auto Block (เมื่อตัวเราโดน Hitbox)", CurrentValue = Settings.AutoBlockAnim, Callback = function(v) Settings.AutoBlockAnim = v end })
+AutoBlockTab:CreateSlider({ Name = "Block Delay (Seconds)", Range = {0, 1}, Increment = 0.01, CurrentValue = Settings.BlockDelay, Callback = function(v) Settings.BlockDelay = v end })
+
+local quickUIUpdateFunc = nil 
+local hitboxQuickUIUpdateFunc = nil
+
+AutoBlockTab:CreateToggle({ Name = "แสดงปุ่มเปิด/ปิดด่วนบนหน้าจอ (Quick UI)", CurrentValue = Settings.ShowQuickUI, Callback = function(v) 
+    Settings.ShowQuickUI = v 
+    if quickUIUpdateFunc then quickUIUpdateFunc() end
+    if hitboxQuickUIUpdateFunc then hitboxQuickUIUpdateFunc() end
+end })
+
+-- ESP Tab UI
+ESPTab:CreateSection("มองทะลุ ผู้รอดชีวิต & ฆาตกร")
+ESPTab:CreateToggle({ Name = "Killer ESP", CurrentValue = Settings.ESP_Killer, Callback = function(v) Settings.ESP_Killer = v; refreshAllESP() end })
+ESPTab:CreateColorPicker({ Name = "Killer Color", Color = Settings.Color_Killer, Callback = function(v) Settings.Color_Killer = v; refreshAllESP() end })
+ESPTab:CreateToggle({ Name = "Survivors ESP (คนเป็น)", CurrentValue = Settings.ESP_Survivors, Callback = function(v) Settings.ESP_Survivors = v; refreshAllESP() end })
+ESPTab:CreateColorPicker({ Name = "Survivors Color", Color = Settings.Color_Survivors, Callback = function(v) Settings.Color_Survivors = v; refreshAllESP() end })
+
+ESPTab:CreateSection("ลูกสมุน & ชาโดว์")
+ESPTab:CreateToggle({ Name = "BOT (มินเนี่ยน) ESP", CurrentValue = Settings.ESP_Bot, Callback = function(v) Settings.ESP_Bot = v; refreshAllESP() end })
+ESPTab:CreateColorPicker({ Name = "BOT Color", Color = Settings.Color_Bot, Callback = function(v) Settings.Color_Bot = v; refreshAllESP() end })
+ESPTab:CreateToggle({ Name = "Shadow (ชาโดว์) ESP", CurrentValue = Settings.ESP_Shadow, Callback = function(v) Settings.ESP_Shadow = v; refreshAllESP() end })
+ESPTab:CreateColorPicker({ Name = "Shadow Color", Color = Settings.Color_Shadow, Callback = function(v) Settings.Color_Shadow = v; refreshAllESP() end })
+
+ESPTab:CreateSection("มองทะลุเครื่องปั่นไฟ & ของ")
+ESPTab:CreateToggle({ Name = "มองเครื่องปั่นไฟ (กรองเครื่องปลอม)", CurrentValue = Settings.ESP_Generators, Callback = function(v) Settings.ESP_Generators = v; refreshAllESP() end })
+ESPTab:CreateToggle({ Name = "BloxyCola ESP", CurrentValue = Settings.ESP_BloxyCola, Callback = function(v) Settings.ESP_BloxyCola = v; refreshAllESP() end })
+ESPTab:CreateToggle({ Name = "Medkit ESP", CurrentValue = Settings.ESP_Medkit, Callback = function(v) Settings.ESP_Medkit = v; refreshAllESP() end })
+
+-- Quick Toggle UI Setup (Auto Block)
+local function CreateQuickUI()
+    local parentGui = (pcall(function() return CoreGui end) and CoreGui) or LocalPlayer:WaitForChild("PlayerGui")
+    if parentGui:FindFirstChild("DuckQuickUI") then parentGui.DuckQuickUI:Destroy() end
+
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "DuckQuickUI"
+    ScreenGui.Parent = parentGui
+    ScreenGui.ResetOnSpawn = false
+    ScreenGui.Enabled = Settings.ShowQuickUI
+
+    local MainFrame = Instance.new("Frame")
+    MainFrame.Size = UDim2.new(0, 130, 0, 45)
+    MainFrame.Position = UDim2.new(0.5, -135, 0, 20)
+    MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    MainFrame.BorderSizePixel = 0
+    MainFrame.Parent = ScreenGui
+    MainFrame.Active = true
+    MainFrame.Draggable = true
+
+    local UICorner = Instance.new("UICorner")
+    UICorner.CornerRadius = UDim.new(0, 8)
+    UICorner.Parent = MainFrame
+
+    local ToggleBtn = Instance.new("TextButton")
+    ToggleBtn.Size = UDim2.new(1, -10, 1, -10)
+    ToggleBtn.Position = UDim2.new(0, 5, 0, 5)
+    ToggleBtn.Text = Settings.MasterAutoBlock and "AutoBlock: ON" or "AutoBlock: OFF"
+    ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    ToggleBtn.BackgroundColor3 = Settings.MasterAutoBlock and Color3.fromRGB(40, 150, 40) or Color3.fromRGB(150, 40, 40)
+    ToggleBtn.Font = Enum.Font.GothamBold
+    ToggleBtn.TextSize = 13
+    ToggleBtn.Parent = MainFrame
+
+    local BtnCorner = Instance.new("UICorner")
+    BtnCorner.CornerRadius = UDim.new(0, 6)
+    BtnCorner.Parent = ToggleBtn
+
+    ToggleBtn.MouseButton1Click:Connect(function()
+        Settings.MasterAutoBlock = not Settings.MasterAutoBlock
+        if Settings.MasterAutoBlock then
+            ToggleBtn.Text = "AutoBlock: ON"
+            ToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 150, 40)
+        else
+            ToggleBtn.Text = "AutoBlock: OFF"
+            ToggleBtn.BackgroundColor3 = Color3.fromRGB(150, 40, 40)
+        end
+    end)
+
+    quickUIUpdateFunc = function() ScreenGui.Enabled = Settings.ShowQuickUI end
+end
+CreateQuickUI()
+
+-- Quick Toggle UI Setup (Hitbox Offset / Hitbox on Head) แยกต่างหาก
+local function CreateHitboxQuickUI()
+    local parentGui = (pcall(function() return CoreGui end) and CoreGui) or LocalPlayer:WaitForChild("PlayerGui")
+    if parentGui:FindFirstChild("DuckHitboxQuickUI") then parentGui.DuckHitboxQuickUI:Destroy() end
+
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "DuckHitboxQuickUI"
+    ScreenGui.Parent = parentGui
+    ScreenGui.ResetOnSpawn = false
+    ScreenGui.Enabled = Settings.ShowQuickUI
+
+    local MainFrame = Instance.new("Frame")
+    MainFrame.Size = UDim2.new(0, 140, 0, 45)
+    MainFrame.Position = UDim2.new(0.5, 5, 0, 20) -- วางไว้ข้างๆ ปุ่ม AutoBlock
+    MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    MainFrame.BorderSizePixel = 0
+    MainFrame.Parent = ScreenGui
+    MainFrame.Active = true
+    MainFrame.Draggable = true
+
+    local UICorner = Instance.new("UICorner")
+    UICorner.CornerRadius = UDim.new(0, 8)
+    UICorner.Parent = MainFrame
+
+    local ToggleBtn = Instance.new("TextButton")
+    ToggleBtn.Size = UDim2.new(1, -10, 1, -10)
+    ToggleBtn.Position = UDim2.new(0, 5, 0, 5)
+    ToggleBtn.Text = Settings.HitboxOffsetEnabled and "Hitbox Head: ON" or "Hitbox Head: OFF"
+    ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    ToggleBtn.BackgroundColor3 = Settings.HitboxOffsetEnabled and Color3.fromRGB(40, 150, 40) or Color3.fromRGB(150, 40, 40)
+    ToggleBtn.Font = Enum.Font.GothamBold
+    ToggleBtn.TextSize = 13
+    ToggleBtn.Parent = MainFrame
+
+    local BtnCorner = Instance.new("UICorner")
+    BtnCorner.CornerRadius = UDim.new(0, 6)
+    BtnCorner.Parent = ToggleBtn
+
+    ToggleBtn.MouseButton1Click:Connect(function()
+        Settings.HitboxOffsetEnabled = not Settings.HitboxOffsetEnabled
+        applyHitboxOffset()
+        if Settings.HitboxOffsetEnabled then
+            ToggleBtn.Text = "Hitbox Head: ON"
+            ToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 150, 40)
+        else
+            ToggleBtn.Text = "Hitbox Head: OFF"
+            ToggleBtn.BackgroundColor3 = Color3.fromRGB(150, 40, 40)
+        end
+    end)
+
+    hitboxQuickUIUpdateFunc = function() ScreenGui.Enabled = Settings.ShowQuickUI end
+end
+CreateHitboxQuickUI()
+
+-- ==========================================
+-- Aimbot & Combat Logic
+-- ==========================================
+local hookedAimbotButtons = {}
+local activeAimbotLoop = nil
+
+local KillerSkillButtons = {
+    ["Perforating"] = true, ["Lacerate"] = true, ["Carving Slash"] = true,
+    ["Stab"] = true, ["Slash"] = true, ["Punch"] = true
+}
+
+local SurvivorSkillButtons = {
+    ["Slash"] = true, ["Hatchet"] = true, ["Punch"] = true, ["One Shot"] = true
+}
+
+local function getNearestTarget(targetCategory, maxRange)
+    local character = LocalPlayer.Character
+    if not character then return nil end
+
+    local myHRP = character:FindFirstChild("HumanoidRootPart")
+    if not myHRP then return nil end
+
+    local nearest = nil
+    local nearestDistance = maxRange
+
+    for obj, category in pairs(trackedESP) do
+        if category == targetCategory and obj and obj.Parent and obj ~= character then
+            local targetHRP = obj:FindFirstChild("HumanoidRootPart")
+            local humanoid = obj:FindFirstChildOfClass("Humanoid")
+
+            if targetHRP and humanoid and humanoid.Health > 0 and not isInLobby(obj) then
+                local distance = (targetHRP.Position - myHRP.Position).Magnitude
+                if distance <= nearestDistance then
+                    nearestDistance = distance
+                    nearest = targetHRP
+                end
+            end
+        end
+    end
+
+    return nearest
+end
+
+local function startAimbot(target, duration)
+    if not target or not target.Parent then return end
+
+    if activeAimbotLoop then
+        activeAimbotLoop:Disconnect()
+        activeAimbotLoop = nil
+    end
+
+    local startTime = tick()
+    activeAimbotLoop = RunService.RenderStepped:Connect(function()
+        if tick() - startTime >= duration or not target or not target.Parent or not LocalPlayer.Character then
+            if activeAimbotLoop then
+                activeAimbotLoop:Disconnect()
+                activeAimbotLoop = nil
+            end
+            return
+        end
+
+        local HRP = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        local camera = Workspace.CurrentCamera
+        if not HRP or not camera then return end
+
+        local targetVelocity = target.AssemblyLinearVelocity
+        local flatVelocity = Vector3.new(targetVelocity.X, 0, targetVelocity.Z)
+        local predictedPosition = target.Position
+
+        if flatVelocity.Magnitude > 2 then
+            predictedPosition = target.Position + (flatVelocity * Settings.AimbotPrediction)
+        end
+
+        local targetCameraCFrame = CFrame.new(camera.CFrame.Position, predictedPosition)
+        camera.CFrame = camera.CFrame:Lerp(targetCameraCFrame, Settings.AimbotSpeed)
+
+        local targetHRPCFrame = CFrame.new(HRP.Position, Vector3.new(predictedPosition.X, HRP.Position.Y, predictedPosition.Z))
+        HRP.CFrame = HRP.CFrame:Lerp(targetHRPCFrame, Settings.AimbotSpeed)
+    end)
+end
+
+local function setupAimbotButton(button)
+    if hookedAimbotButtons[button] then return end
+    hookedAimbotButtons[button] = true
+
+    local function triggerAimbot()
+        local myRole = getMyRole()
+        if not myRole then return end
+
+        if myRole == "Killer" then
+            if not Settings.AimbotKillerEnabled or not KillerSkillButtons[button.Name] then return end
+            local target = getNearestTarget("Survivors", Settings.KillerLockRange)
+            if target then startAimbot(target, Settings.KillerLockDuration) end
+            return
+        end
+
+        if myRole == "Survivor" then
+            if not Settings.AimbotSurvivorEnabled or not SurvivorSkillButtons[button.Name] then return end
+            local target = getNearestTarget("Killer", Settings.SurvivorLockRange)
+            if target then startAimbot(target, Settings.SurvivorLockDuration) end
+        end
+    end
+
+    if button.Activated then
+        button.Activated:Connect(triggerAimbot)
+    end
+end
+
+task.spawn(function()
+    local pGui = LocalPlayer:WaitForChild("PlayerGui", 5)
+    if pGui then
+        for _, desc in ipairs(pGui:GetDescendants()) do
+            if desc:IsA("GuiButton") and (KillerSkillButtons[desc.Name] or SurvivorSkillButtons[desc.Name]) then
+                setupAimbotButton(desc)
+            end
+        end
+        pGui.DescendantAdded:Connect(function(desc)
+            if desc:IsA("GuiButton") and (KillerSkillButtons[desc.Name] or SurvivorSkillButtons[desc.Name]) then
+                setupAimbotButton(desc)
+            end
+        end)
+    end
+end)
+
+-- ==========================================
+-- Direct Remote Auto Block Logic (0 Delay)
+-- ==========================================
+local blockCooldown = false
+
+local function fireDirectBlockRemote()
+    local success = false
+    pcall(function()
+        local networkFolder = ReplicatedStorage:FindFirstChild("Modules")
+            and ReplicatedStorage.Modules:FindFirstChild("Network")
+            and ReplicatedStorage.Modules.Network:FindFirstChild("Network")
+
+        local event = networkFolder and networkFolder:FindFirstChild("RemoteEvent")
+        if event then
+            event:FireServer("UseActorAbility", { cachedBlockBuffer })
+            success = true
+        end
+    end)
+    return success
+end
+
+local function performBlock(customDelay)
+    if blockCooldown or not Settings.MasterAutoBlock then return end
+    blockCooldown = true
+    
+    local finalDelay = customDelay or Settings.BlockDelay
+
+    local function executeBlock()
+        local sent = fireDirectBlockRemote()
+        
+        if not sent then
+            task.spawn(function()
+                pcall(function()
+                    local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+                    local blockButton = pGui and pGui:FindFirstChild("MainUI") and pGui.MainUI:FindFirstChild("AbilityContainer") and pGui.MainUI.AbilityContainer:FindFirstChild("Block")
+                    if blockButton and firesignal then
+                        firesignal(blockButton.Activated)
+                    else
+                        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                        task.wait(0.05)
+                        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+                    end
+                end)
+            end)
+        end
+    end
+
+    if finalDelay <= 0.01 then 
+        executeBlock()
+    else 
+        task.delay(finalDelay, executeBlock) 
+    end
+    
+    task.delay(0.35, function() blockCooldown = false end)
+end
+
+local function spawnHitboxAndCheck(character)
+    if isInLobby(character) then return end
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local boxSize = Vector3.new(Settings.BoxSize, Settings.BoxSize + 1, Settings.BoxSize) 
+    local forwardOffset = - (Settings.BoxSize / 2) - Settings.HitboxDistance
+
+    local box = Instance.new("Part")
+    box.Name = "M1_Predict_Box"
+    box.Size = boxSize
+    box.Color = Settings.BoxColor
+    box.Transparency = Settings.HitboxEnabled and Settings.BoxTransparency or 1 
+    box.Material = Settings.GlowMode and Enum.Material.Neon or Enum.Material.SmoothPlastic
+    box.CanCollide = false
+    box.CanQuery = false
+    box.Massless = true
+    box.Anchored = false 
+    box.CFrame = hrp.CFrame * CFrame.new(0, 0, forwardOffset)
+
+    local weld = Instance.new("WeldConstraint")
+    weld.Part0 = hrp
+    weld.Part1 = box
+    weld.Parent = box
+    box.Parent = Workspace
+    Debris:AddItem(box, Settings.VisibleTime)
+
+    local connection
+    local startTime = tick()
+    
+    connection = RunService.Heartbeat:Connect(function()
+        if tick() - startTime > Settings.VisibleTime or not box.Parent then
+            if connection then connection:Disconnect() end
+            return
+        end
+        if Settings.MasterAutoBlock and Settings.AutoBlockAnim and LocalPlayer.Character then
+            local overlapParams = OverlapParams.new()
+            overlapParams.FilterDescendantsInstances = {LocalPlayer.Character}
+            overlapParams.FilterType = Enum.RaycastFilterType.Include
+
+            local partsInBox = Workspace:GetPartBoundsInBox(box.CFrame, box.Size, overlapParams)
+            if #partsInBox > 0 then
+                performBlock(0) 
+                if connection then connection:Disconnect() end
+            end
+        end
+    end)
+end
+
+-- ==========================================
+-- Animation Listener
+-- ==========================================
+local activeCooldowns = {}
+local hookedAnimators = {}
+
+local function setupAnimator(animator)
+    if hookedAnimators[animator] then return end
+    hookedAnimators[animator] = true
+
+    local character = animator:FindFirstAncestorOfClass("Model")
+    if not character or isInLobby(character) then return end
+
+    animator.AnimationPlayed:Connect(function(track)
+        if isInLobby(character) then return end
+        
+        local animId = track.Animation and track.Animation.AnimationId
+        if not animId then return end
+        
+        local numId = string.match(animId, "%d+")
+        if numId and KillerWindups[numId] then
+            if not activeCooldowns[character] then
+                activeCooldowns[character] = true
+                task.spawn(function() spawnHitboxAndCheck(character) end)
+                task.delay(Settings.VisibleTime, function() activeCooldowns[character] = false end)
+            end
+        end
+    end)
+end
+
+-- ==========================================
+-- Initialization & Event Listeners
+-- ==========================================
+applyFPSBoostAll()
+
+for _, obj in ipairs(Workspace:GetDescendants()) do
+    if obj:IsA("Animator") then setupAnimator(obj) end
+    registerESPObject(obj)
+end
+
+Workspace.DescendantAdded:Connect(function(obj)
+    optimizeInstanceForFPS(obj)
+    if isInLobby(obj) then return end
+    if obj:IsA("Animator") then setupAnimator(obj) end
+    registerESPObject(obj)
+end)
+
+Players.PlayerAdded:Connect(function(player)
+    player.CharacterAdded:Connect(function(char)
+        task.wait(1)
+        registerESPObject(char)
+    end)
+end)
+
+for _, player in ipairs(Players:GetPlayers()) do
+    if player.Character then registerESPObject(player.Character) end
+    player.CharacterAdded:Connect(function(char)
+        task.wait(1)
+        registerESPObject(char)
+    end)
+end
+
+task.spawn(function()
+    while task.wait(1) do refreshAllESP() end
+end)

@@ -1506,7 +1506,7 @@ createParagraph(tabInto,
 🔴 = มีข้อผิดพลาด กำลังแก้ไข
 🟡 = พอใช้ได้
 
-Auto Block 🟢
+Auto Block 🟡
 --- ID เสียงครบ
 --- block m1 sixer ยังไม่เสถียร
 Punch Aimbot 🟢 
@@ -1515,6 +1515,7 @@ Stamina Setting 🟢
 ---แก้เรียบร้อยเสถียรแล้ว
 Save Config 🟢
 --- ใช้งานได้แล้ว
++ESP🟡
 
 โปรดติดตามฟังชั่นต่อไป ขอบคุณที่ใช้งาน
 ╔══╦╗════╔╗═╔╗╔╗
@@ -1527,7 +1528,7 @@ Save Config 🟢
 🔴 = Errors, fixing
 🟡 = Fair / Usable
 
-Auto Block 🟢
+Auto Block 🟡
 --- All sound IDs included
 --- Blocking M1 for Sixer is still unstable
 Punch Aimbot 🟢 
@@ -1536,6 +1537,7 @@ Stamina Setting 🟢
 --- Fixed and currently stable
 Save Config 🟢
 --- Fully functional
++ESP 🟡
 
 Stay tuned for upcoming features. Thank you for using!
 ╔══╦╗════╔╗═╔╗╔╗
